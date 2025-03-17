@@ -49,6 +49,30 @@ function Get-AddressList($a) {
     }) -join ';'
 }
 
+function ConvertFrom-QuotedPrintable($content) {
+    $sb = [System.Text.StringBuilder]::new()
+    $stream = [System.IO.MemoryStream]::new()
+    foreach ($line in $content) {
+        $stream.SetLength(0)        
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes($line)
+        for ($i = 0; $i -lt $bytes.Count; ++$i) {
+            if ($bytes[$i] -eq [char]'=' -and $i -lt $bytes.Count - 1) {
+                $stream.WriteByte([Convert]::ToByte([System.Text.Encoding]::ASCII.GetString($bytes, $i + 1, 2), 16))
+                $i += 2
+            } else {
+                $stream.WriteByte($bytes[$i])
+            }
+        }
+        $chars = [System.Text.Encoding]::UTF8.GetChars($stream.ToArray())
+        if ($chars[$chars.Count - 1] -eq '=') {
+            [void]$sb.Append($chars, 0, $chars.Count - 1)
+        } else {
+            [void]$sb.Append($chars).Append("`r`n")
+        }
+    }
+    return $sb.ToString()
+}
+
 $headers, $content = Get-HeadersContent($lines)
 $parts = @()
 if ($headers['Content-Type'] -match 'multipart/alternative;\s*boundary=(.+)$') {
@@ -94,15 +118,22 @@ $Mail.BCC = $bcc
 foreach ($part in $parts) {
     $headers = $part.headers
     $content = $part.content
+
+    if ($headers['Content-Transfer-Encoding'] -eq 'quoted-printable') {
+        $body = ConvertFrom-QuotedPrintable($content)
+    } else {
+        $body = $content -join "`r`n"
+    }
+
     if ($headers['Content-Type'] -match 'text/html') {
-        $Mail.HTMLBody = $content -join "`r`n"
+        $Mail.HTMLBody = $body
     }
     else  {
         # olFormatPlain (Value: 1) for Plain Text
         # olFormatHTML (Value: 2) for HTML
         # olFormatRichText (Value: 3) for Rich Text
         $Mail.BodyFormat = 1
-        $Mail.Body = $content -join "`r`n"
+        $Mail.Body = $body
     }
 }
 
